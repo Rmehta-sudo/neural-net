@@ -1,152 +1,229 @@
 package engine
 
-import "fmt"
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
-type Value struct{
-	data float64
-	grad float64
-	prev []*Value
-	op string
-	label string
-	backward func()
+// Value represents a scalar value in the computational graph.
+// It stores its data, gradient, previous values in the graph,
+// the operation that created it, a label for debugging,
+// and a backward function for gradient propagation.
+type Value struct {
+	Data     float64
+	Grad     float64
+	Prev     []*Value
+	Op       string
+	Label    string
+	Backward func()
 }
 
-func (val *Value) String() string{
-	return fmt.Sprintf("%s = %f | grad = %f | op = %s",val.label,val.data,val.grad,val.op)
+// String provides a formatted string representation of a Value.
+func (val *Value) String() string {
+	return fmt.Sprintf("Value(label='%s', data=%.4f, grad=%.4f, op='%s')", val.Label, val.Data, val.Grad, val.Op)
 }
 
-func newVal(val float64,label string) *Value{
+// NewValue creates and returns a new Value instance.
+// It initializes the data and label, and sets up a no-op backward function by default.
+func NewValue(val float64, label string) *Value {
 	return &Value{
-		data : val,
-		label : label,
-		backward: func() {},
+		Data:     val,
+		Label:    label,
+		Backward: func() {}, // Default no-op backward function
 	}
 }
 
-func (a * Value) add(b * Value) *Value{
+// Add performs element-wise addition between two Values.
+// It returns a new Value representing the sum and sets up its backward function.
+func (a *Value) Add(b *Value) *Value {
 	out := &Value{
-		data : a.data + b.data,
-		grad : 0,
-		prev : []*Value{a,b},
-		op   : "+",
-		label:"",
+		Data:  a.Data + b.Data,
+		Grad:  0,
+		Prev:  []*Value{a, b},
+		Op:    "+",
+		Label: "",
 	}
 
-	out.backward = func(){
-		a.grad += out.grad
-		b.grad += out.grad
+	out.Backward = func() {
+		a.Grad += out.Grad
+		b.Grad += out.Grad
 	}
 
 	return out
 }
 
-func (a * Value) mul(b * Value) *Value{
+// Mul performs element-wise multiplication between two Values.
+// It returns a new Value representing the product and sets up its backward function.
+func (a *Value) Mul(b *Value) *Value {
 	out := &Value{
-		data : a.data * b.data,
-		grad : 0,
-		prev : []*Value{a,b},
-		op   : "*",
-		label:"",
+		Data:  a.Data * b.Data,
+		Grad:  0,
+		Prev:  []*Value{a, b},
+		Op:    "*",
+		Label: "",
 	}
 
-	out.backward = func(){
-		a.grad += b.data * out.grad
-		b.grad += a.data * out.grad
+	out.Backward = func() {
+		a.Grad += b.Data * out.Grad
+		b.Grad += a.Data * out.Grad
 	}
 
 	return out
 }
 
-func (a * Value) tanh() *Value{
+// Sub performs element-wise subtraction between two Values (a - b).
+// It returns a new Value representing the difference and sets up its backward function.
+func (a *Value) Sub(b *Value) *Value {
+	// a - b can be seen as a + (-1 * b)
+	negB := b.Mul(NewValue(-1.0, "")) // Create a temporary Value for -1
+	negB.Label = fmt.Sprintf("-%s", b.Label)
+	out := a.Add(negB)
+	out.Op = "-"
+	out.Label = "" // Label will be set by user or derived during graph ops
+	return out
+}
+
+// Pow calculates a Value raised to a given power (a^power).
+// It returns a new Value representing the result and sets up its backward function.
+func (a *Value) Pow(power float64) *Value {
 	out := &Value{
-		data : math.Tanh(a.data) ,
-		grad : 0,
-		prev : []*Value{a},
-		op   : "tanh",
-		label:"",
+		Data:  math.Pow(a.Data, power),
+		Grad:  0,
+		Prev:  []*Value{a},
+		Op:    fmt.Sprintf("**%.4f", power), // Example: **2.0 for square
+		Label: "",
 	}
 
-	out.backward = func(){
-		a.grad += out.grad * (1 - out.data*out.data)
+	out.Backward = func() {
+		a.Grad += out.Grad * power * math.Pow(a.Data, power-1)
+	}
+	return out
+}
+
+// Div performs element-wise division between two Values (a / b).
+// It returns a new Value representing the quotient and sets up its backward function.
+func (a *Value) Div(b *Value) *Value {
+	// a / b can be seen as a * b^(-1)
+	invB := b.Pow(-1.0)
+	invB.Label = fmt.Sprintf("1/%s", b.Label)
+	out := a.Mul(invB)
+	out.Op = "/"
+	out.Label = "" // Label will be set by user or derived during graph ops
+	return out
+}
+
+// Tanh applies the hyperbolic tangent activation function to a Value.
+// It returns a new Value representing the tanh result and sets up its backward function.
+func (a *Value) Tanh() *Value {
+	out := &Value{
+		Data:  math.Tanh(a.Data),
+		Grad:  0,
+		Prev:  []*Value{a},
+		Op:    "tanh",
+		Label: "",
+	}
+
+	out.Backward = func() {
+		a.Grad += out.Grad * (1 - out.Data*out.Data)
 	}
 
 	return out
 }
-/*
-b = tanh(a)
-L = f(b)
 
-dL/da = dL/db * db/da = f'(x) * (1 - tanh^2(x)) = out.grad * (1 - out.data*out.data)
-*/
-
-/*
-topoSort
-a
-b  r
-	     L
-c  s
-d
-*/
-
+// reversedCopy creates a new slice with elements copied in reverse order.
 func reversedCopy[T any](s []T) []T {
-    n := len(s)
-    reversed := make([]T, n)
-    for i := 0; i < n; i++ {
-        reversed[i] = s[n-1-i]
-    }
-    return reversed
+	n := len(s)
+	reversed := make([]T, n)
+	for i := 0; i < n; i++ {
+		reversed[i] = s[n-1-i]
+	}
+	return reversed
 }
 
-func create_topo_net(L * Value)[]*Value{
-	var topo_net []*Value
+// createTopoNet performs a topological sort of the computational graph
+// starting from the given Value node. It returns a slice of Value pointers
+// in topological order, where each node appears after all its dependencies.
+func createTopoNet(L *Value) []*Value {
+	var topoNet []*Value
 
-	var build_topo func(*Value)
+	var buildTopo func(*Value)
 	visited := map[*Value]bool{}
-	build_topo = func (node *Value){
-		if(!visited[node]){
-			// fmt.Println(node)
+	buildTopo = func(node *Value) {
+		if !visited[node] {
 			visited[node] = true
-			for _,child := range node.prev{
-				build_topo(child)
+			for _, child := range node.Prev {
+				buildTopo(child)
 			}
-			topo_net = append(topo_net,node)
+			topoNet = append(topoNet, node)
 		}
 	}
-	build_topo(L)
-	return reversedCopy(topo_net)
+	buildTopo(L)
+	return reversedCopy(topoNet)
 }
 
-func (v *Value) full_back() {
-	topo := create_topo_net(v)
+// FullBackward initiates the backpropagation process from the current Value node.
+// It computes gradients for all preceding nodes in the computational graph.
+// The gradient of the current Value is initialized to 1.0 before backpropagation.
+func (v *Value) FullBackward() {
+	topo := createTopoNet(v)
 
-	for _,node := range topo{
-		node.grad = 0
+	// Reset all gradients in the graph to zero before starting new backprop
+	for _, node := range topo {
+		node.Grad = 0
 	}
-	v.grad = 1
+	v.Grad = 1.0 // Gradient of the loss with respect to itself is 1
 
-	for _,node := range(topo){
-		node.backward()
+	// Iterate in topological order and call backward functions
+	for _, node := range topo {
+		node.Backward()
 	}
 }
 
-func TestValue(){
-	a := newVal( 5,"a")
-	b := newVal(10,"b")
-	c := newVal(12,"c")
-	d := newVal(20,"d")
+// TestValue demonstrates the usage of the Value type and its operations.
+// It creates a simple computational graph and performs forward and backward passes.
+func TestValue() {
+	fmt.Println("--- Testing Value Operations and Backpropagation ---")
 
-	ab := a.mul(b);ab.label = "ab"
-	cd := c.mul(d);cd.label = "cd"
-	acd := a.mul(c).mul(d);acd.label = "acd"
+	a := NewValue(5, "a")
+	b := NewValue(10, "b")
+	c := NewValue(12, "c")
+	d := NewValue(20, "d")
 
-	apcd := a.add(cd);apcd.label="apcd"
-	m  := ab.add(cd);m.label="m"
-	L := m.add(apcd).add(acd);L.label="L"
+	// Demonstrate basic operations
+	fmt.Println("Initial Values:")
+	fmt.Println(a)
+	fmt.Println(b)
+	fmt.Println(c)
+	fmt.Println(d)
+	fmt.Println()
 
-	for _,node:= range create_topo_net(L){
+	ab := a.Mul(b)
+	ab.Label = "ab"
+	cd := c.Mul(d)
+	cd.Label = "cd"
+	acd := a.Mul(c).Mul(d)
+	acd.Label = "acd"
+
+	apcd := a.Add(cd)
+	apcd.Label = "apcd"
+	m := ab.Add(cd)
+	m.Label = "m"
+	L := m.Add(apcd).Add(acd)
+	L.Label = "L"
+
+	fmt.Println("Computational Graph Nodes (before backprop):")
+	for _, node := range createTopoNet(L) {
 		fmt.Println(node)
 	}
+	fmt.Println()
 
+	// Perform backpropagation
+	L.FullBackward()
 
+	fmt.Println("Computational Graph Nodes (after backprop - gradients computed):")
+	for _, node := range createTopoNet(L) {
+		fmt.Println(node)
+	}
+	fmt.Println("--- End TestValue ---")
+	fmt.Println()
 }
